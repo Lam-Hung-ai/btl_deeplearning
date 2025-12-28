@@ -33,10 +33,11 @@ train_params:
   use_nms_infer : True
   seed: 1111
   acc_steps: 1
-  num_epochs: 200
-  batch_size: 700
-  lr_steps: [ 200 ]
+  num_epochs: 150
+  batch_size: 650
+  num_workers: 8
+  lr_steps: [ 120 ]
   lr: 0.0001
   log_steps : 500
   ckpt_name: 'detr_34.pth'
-  patience: 10
+  patience: 7

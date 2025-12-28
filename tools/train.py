@@ -12,6 +12,13 @@ from torch.optim.lr_scheduler import MultiStepLR
 
 # Thiết lập device (ưu tiên cuda, sau đó đến cpu)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# Tối ưu hóa cho H100
+if torch.cuda.is_available():
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
+
 # Kiểm tra nếu có hỗ trợ mps (cho chip Apple Silicon)
 if torch.backends.mps.is_available():
     device = torch.device('mps')
@@ -19,7 +26,9 @@ if torch.backends.mps.is_available():
 
 
 def collate_function(data):
-    return tuple(zip(*data))
+    images, targets, paths = zip(*data)
+    images = torch.stack(images, dim=0)
+    return images, targets, paths
 
 
 def train(args):
@@ -49,7 +58,10 @@ def train(args):
     train_dataset = DataLoader(voc,
                                batch_size=train_config['batch_size'],
                                shuffle=True,
-                               collate_fn=collate_function)
+                               collate_fn=collate_function,
+                               num_workers=train_config.get('num_workers', 4),
+                               pin_memory=True,
+                               persistent_workers=True)
 
     # Khởi tạo dataset và dataloader cho việc validation
     val_voc = VOCDataset('val',
@@ -58,7 +70,10 @@ def train(args):
     val_dataset = DataLoader(val_voc,
                                batch_size=train_config['batch_size'],
                                shuffle=False,
-                               collate_fn=collate_function)
+                               collate_fn=collate_function,
+                               num_workers=train_config.get('num_workers', 4),
+                               pin_memory=True,
+                               persistent_workers=True)
 
     # Khởi tạo model và load checkpoint nếu đã tồn tại
     model = DETR(
@@ -67,6 +82,12 @@ def train(args):
         bg_class_idx=dataset_config['bg_class_idx']
     )
     model.to(device)
+    
+    # Compile model để tối ưu hóa tốc độ (PyTorch 2.0+)
+    if hasattr(torch, 'compile'):
+        print("Compiling model with max-autotune...")
+        model = torch.compile(model, mode="max-autotune")
+        
     model.train()
 
     # Kiểm tra xem file checkpoint có tồn tại hay không
@@ -88,7 +109,8 @@ def train(args):
     optimizer = torch.optim.AdamW(lr=train_config['lr'],
                                   params=filter(lambda p: p.requires_grad,
                                                 model.parameters()),
-                                  weight_decay=1E-4)
+                                  weight_decay=1E-4,
+                                  fused=True if torch.cuda.is_available() else False)
 
     # Các đoạn comment dưới đây dùng để thiết lập learning rate riêng cho backbone và transformer (nếu cần)
     # backbone_params = [
@@ -114,34 +136,42 @@ def train(args):
     trigger_times = 0
     log_file_path = os.path.join(train_config['task_name'], 'training_log.txt')
 
+    # Khởi tạo GradScaler cho Mixed Precision Training
+    scaler = torch.cuda.amp.GradScaler()
+
     # Vòng lặp training qua từng epoch
     for i in range(num_epochs):
         detr_classification_losses = []
         detr_localization_losses = []
-        for idx, (ims, targets, _) in enumerate(tqdm(train_dataset)):
+        for idx, (images, targets, _) in enumerate(tqdm(train_dataset)):
             # Chuyển dữ liệu target sang đúng device và format
             for target in targets:
                 target['boxes'] = target['boxes'].float().to(device)
                 target['labels'] = target['labels'].long().to(device)
-            images = torch.stack([im.float().to(device) for im in ims], dim=0)
             
-            # Forward pass và tính loss
-            batch_losses = model(images, targets)['loss']
+            images = images.to(device, non_blocking=True)
+            
+            # Forward pass và tính loss với Mixed Precision
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16):
+                batch_losses = model(images, targets)['loss']
 
-            loss = (sum(batch_losses['classification']) +
-                    sum(batch_losses['bbox_regression']))
+                loss = (sum(batch_losses['classification']) +
+                        sum(batch_losses['bbox_regression']))
 
             detr_classification_losses.append(sum(batch_losses['classification']).item())
             detr_localization_losses.append(sum(batch_losses['bbox_regression']).item())
             
             # Tính toán gradient với kỹ thuật gradient accumulation
             loss = loss / acc_steps
-            loss.backward()
+            scaler.scale(loss).backward()
 
             # Cập nhật trọng số model sau một số bước tích lũy (acc_steps)
             if (idx + 1) % acc_steps == 0:
-                optimizer.step()
-                optimizer.zero_grad()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad(set_to_none=True)
             
             # Log kết quả loss định kỳ
             if steps % train_config['log_steps'] == 0:
@@ -159,23 +189,23 @@ def train(args):
             steps += 1
             
         # Cập nhật optimizer và scheduler sau mỗi epoch
-        optimizer.step()
-        optimizer.zero_grad()
         lr_scheduler.step()
         
         # Validation loop
         model.eval()
         val_losses = []
         with torch.no_grad():
-            for ims, targets, _ in tqdm(val_dataset, desc='Validation'):
+            for images, targets, _ in tqdm(val_dataset, desc='Validation'):
                 for target in targets:
                     target['boxes'] = target['boxes'].float().to(device)
                     target['labels'] = target['labels'].long().to(device)
-                images = torch.stack([im.float().to(device) for im in ims], dim=0)
                 
-                batch_losses = model(images, targets)['loss']
-                loss = (sum(batch_losses['classification']) +
-                        sum(batch_losses['bbox_regression']))
+                images = images.to(device, non_blocking=True)
+                
+                with torch.autocast(device_type='cuda', dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16):
+                    batch_losses = model(images, targets)['loss']
+                    loss = (sum(batch_losses['classification']) +
+                            sum(batch_losses['bbox_regression']))
                 val_losses.append(loss.item())
         
         model.train()

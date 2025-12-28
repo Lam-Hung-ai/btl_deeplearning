@@ -4,6 +4,7 @@ import torchvision.models
 from torchvision.models import resnet34
 from scipy.optimize import linear_sum_assignment
 from collections import defaultdict
+from joblib import Parallel, delayed
 
 
 def get_spatial_position_embedding(pos_emb_dim, feat_map):
@@ -449,17 +450,20 @@ class DETR(nn.Module):
                     # total_cost_per_batch_image[0]=(B, num_queries, num_targets_anh_thu_0)
                     # total_cost_per_batch_image[i]=(B, num_queries, num_targets_anh_thu_i)
 
+                    def solve_matching(cost_matrix):
+                        return linear_sum_assignment(cost_matrix)
+
+                    # Song song hóa việc matching trên CPU
+                    # Sử dụng prefer="threads" để giảm overhead khởi tạo process cho các task nhỏ (25 queries)
+                    match_results = Parallel(n_jobs=-1, prefer="threads")(
+                        delayed(solve_matching)(total_cost_per_batch_image[i][i].numpy())
+                        for i in range(batch_size)
+                    )
+
                     match_indices = []
-                    for batch_idx in range(batch_size):
-                        batch_idx_assignments = linear_sum_assignment(
-                            total_cost_per_batch_image[batch_idx][batch_idx]
-                        )
-                        batch_idx_pred, batch_idx_target = batch_idx_assignments
-                        # len(batch_idx_assignment_pred) = num_targets_anh_thu_i
-                        match_indices.append((torch.as_tensor(batch_idx_pred,
-                                                              dtype=torch.int64),
-                                              torch.as_tensor(batch_idx_target,
-                                                              dtype=torch.int64)))
+                    for batch_idx_pred, batch_idx_target in match_results:
+                        match_indices.append((torch.as_tensor(batch_idx_pred, dtype=torch.int64),
+                                              torch.as_tensor(batch_idx_target, dtype=torch.int64)))
                         # match_indices -> [
                         #   ([pred_box_a1, ...],[target_box_i1, ...]),
                         #   ([pred_box_a2, ...],[target_box_i2, ...]),
@@ -529,18 +533,23 @@ class DETR(nn.Module):
                 # Không cần chuyển đổi target boxes vì chúng đã ở định dạng x1y1x2y2
                 
                 # Tính L1 Localization loss
-                loss_bbox = torch.nn.functional.l1_loss(
-                    matched_pred_boxes_x1y1x2y2,
-                    target_boxes,
-                    reduction='none')
-                loss_bbox = loss_bbox.sum() / matched_pred_boxes.shape[0]
+                num_matched_boxes = matched_pred_boxes.shape[0]
+                if num_matched_boxes > 0:
+                    loss_bbox = torch.nn.functional.l1_loss(
+                        matched_pred_boxes_x1y1x2y2,
+                        target_boxes,
+                        reduction='none')
+                    loss_bbox = loss_bbox.sum() / num_matched_boxes
 
-                # Tính GIoU loss
-                loss_giou = torchvision.ops.generalized_box_iou_loss(
-                    matched_pred_boxes_x1y1x2y2,
-                    target_boxes
-                )
-                loss_giou = loss_giou.sum() / matched_pred_boxes.shape[0]
+                    # Tính GIoU loss
+                    loss_giou = torchvision.ops.generalized_box_iou_loss(
+                        matched_pred_boxes_x1y1x2y2,
+                        target_boxes
+                    )
+                    loss_giou = loss_giou.sum() / num_matched_boxes
+                else:
+                    loss_bbox = torch.tensor(0.0, device=cls_idx_output.device)
+                    loss_giou = torch.tensor(0.0, device=cls_idx_output.device)
 
                 losses['classification'].append(loss_cls * self.cls_cost_weight)
                 losses['bbox_regression'].append(

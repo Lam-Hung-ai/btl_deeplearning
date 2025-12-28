@@ -8,4 +8,5 @@ torchvision
 kagglehub
 tqdm
 scipy
+joblib
 datasets
