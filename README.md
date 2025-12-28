@@ -1,1 +1,3 @@
-dowload: https://www.kaggle.com/datasets/vijayabhaskar96/pascal-voc-2007-and-2012
+dowload: 
+- https://www.kaggle.com/datasets/zaraks/pascal-voc-2007
+- https://www.kaggle.com/datasets/huanghanchina/pascal-voc-2012
