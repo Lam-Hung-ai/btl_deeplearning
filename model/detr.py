@@ -1,43 +1,13 @@
 import torch
 import torch.nn as nn
 import torchvision.models
+from torchvision.models import resnet34
 from scipy.optimize import linear_sum_assignment
 from collections import defaultdict
-from torchvision.models import (
-    resnet34,
-    resnet50,
-    resnet101,
-    ResNet34_Weights,
-    ResNet50_Weights,
-    ResNet101_Weights,
-)
-
-def build_backbone(config):
-    match config["backbone"]:
-        case "resnet34":
-            return resnet34(
-                weights=ResNet34_Weights.IMAGENET1K_V1,
-                norm_layer=torchvision.ops.FrozenBatchNorm2d
-            )
-
-        case "resnet50":
-            return resnet50(
-                weights=ResNet50_Weights.IMAGENET1K_V1,
-                norm_layer=torchvision.ops.FrozenBatchNorm2d
-            )
-
-        case "resnet101":
-            return resnet101(
-                weights=ResNet101_Weights.IMAGENET1K_V1,
-                norm_layer=torchvision.ops.FrozenBatchNorm2d
-            )
-
-        case _:
-            raise ValueError(f"Backbone không hỗ trợ: {config['backbone']}")
 
 
 def get_spatial_position_embedding(pos_emb_dim, feat_map):
-    # Đảm bảo pos_emb_dim phải chia hết cho 4
+    # Đảm bảo kích thước position embedding phải chia hết cho 4
     assert pos_emb_dim % 4 == 0, ('Position embedding dimension '
                                   'must be divisible by 4')
     grid_size_h, grid_size_w = feat_map.shape[2], feat_map.shape[3]
@@ -91,7 +61,7 @@ class TransformerEncoder(nn.Module):
         4. MLP
     """
     def __init__(self, num_layers, num_heads, d_model, ff_inner_dim,
-                  dropout_prob=0.0):
+                 dropout_prob=0.0):
         super().__init__()
         self.num_layers = num_layers
         self.dropout_prob = dropout_prob
@@ -146,7 +116,7 @@ class TransformerEncoder(nn.Module):
                 for _ in range(num_layers)
             ])
 
-        # Norm cho encoder output
+        # Norm cho output của encoder
         self.output_norm = nn.LayerNorm(d_model)
 
     def forward(self, x, spatial_position_embedding):
@@ -193,7 +163,7 @@ class TransformerDecoder(nn.Module):
             6. MLP
     """
     def __init__(self, num_layers, num_heads, d_model, ff_inner_dim,
-                  dropout_prob=0.0):
+                 dropout_prob=0.0):
         super().__init__()
         self.num_layers = num_layers
         self.dropout_prob = dropout_prob
@@ -228,49 +198,49 @@ class TransformerDecoder(nn.Module):
                 for _ in range(num_layers)
             ])
 
-        # Norm cho module Self Attention cho tất cả các decoder layers
+        # Norm cho Module Self Attention cho tất cả các decoder layers
         self.attn_norms = nn.ModuleList(
                 [
                     nn.LayerNorm(d_model)
                     for _ in range(num_layers)
                 ])
 
-        # Norm cho module Cross Attention cho tất cả các decoder layers
+        # Norm cho Module Cross Attention cho tất cả các decoder layers
         self.cross_attn_norms = nn.ModuleList(
             [
                 nn.LayerNorm(d_model)
                 for _ in range(num_layers)
             ])
 
-        # Norm cho module MLP cho tất cả các decoder layers
+        # Norm cho Module MLP cho tất cả các decoder layers
         self.ff_norms = nn.ModuleList(
             [
                 nn.LayerNorm(d_model)
                 for _ in range(num_layers)
             ])
 
-        # Dropout cho module Attention cho tất cả các decoder layers
+        # Dropout cho Module Attention cho tất cả các decoder layers
         self.attn_dropouts = nn.ModuleList(
             [
                 nn.Dropout(self.dropout_prob)
                 for _ in range(num_layers)
             ])
 
-        # Dropout cho module Cross Attention cho tất cả các decoder layers
+        # Dropout cho Module Cross Attention cho tất cả các decoder layers
         self.cross_attn_dropouts = nn.ModuleList(
             [
                 nn.Dropout(self.dropout_prob)
                 for _ in range(num_layers)
             ])
 
-        # Dropout cho module MLP cho tất cả các decoder layers
+        # Dropout cho Module MLP cho tất cả các decoder layers
         self.ff_dropouts = nn.ModuleList(
             [
                 nn.Dropout(self.dropout_prob)
                 for _ in range(num_layers)
             ])
 
-        # LayerNorm đầu ra dùng chung cho tất cả decoder outputs
+        # Norm đầu ra dùng chung cho tất cả các decoder outputs
         self.output_norm = nn.LayerNorm(d_model)
 
     def forward(self, query_objects, encoder_output,
@@ -317,10 +287,10 @@ class TransformerDecoder(nn.Module):
 
 class DETR(nn.Module):
     r"""
-    Lớp model DETR khởi tạo tất cả các layers của DETR.
-    Một lượt forward pass đi qua các layer sau:
-        1. Gọi Backbone (hiện tại là resnet 34 đã được đóng băng/frozen)
-        2. Phép chiếu Backbone Featuremap sang d_model của transformer
+    Lớp mô hình DETR khởi tạo tất cả các layers của DETR.
+    Một lượt forward pass đi qua các layers sau:
+        1. Gọi Backbone (hiện tại là resnet 34 đã đóng băng/frozen)
+        2. Chiếu (Projection) Backbone Featuremap sang d_model của transformer
         3. Encoder của Transformer
         4. Decoder của Transformer
         5. MLP cho Class và BBox
@@ -340,9 +310,12 @@ class DETR(nn.Module):
         self.bg_class_idx = bg_class_idx
         valid_bg_idx = (self.bg_class_idx == 0 or
                         self.bg_class_idx == (self.num_classes-1))
-        assert valid_bg_idx, "Background can only be 0 or num_classes-1"
+        assert valid_bg_idx, "Background chỉ có thể là 0 hoặc num_classes-1"
 
-        self.backbone = nn.Sequential(*list(build_backbone(config).children())[:-2])
+        self.backbone = nn.Sequential(*list(resnet34(
+            weights=torchvision.models.ResNet34_Weights.IMAGENET1K_V1,
+            norm_layer=torchvision.ops.FrozenBatchNorm2d
+        ).children())[:-2])
 
         if config['freeze_backbone']:
             for param in self.backbone.parameters():
@@ -374,8 +347,8 @@ class DETR(nn.Module):
         # x -> (B, C, H, W)
         # mặc định d_model - 256
         # mặc định C - 3
-        # mặc định H, W - 640, 640
-        # mặc định feat_h, feat_w - 20, 20
+        # mặc định H,W - 640,640
+        # mặc định feat_h,feat_w - 20,20
 
         conv_out = self.backbone(x)  # (B, C_back, feat_h, feat_w)
         # mặc định C_back - 512
@@ -388,12 +361,12 @@ class DETR(nn.Module):
 
         conv_out = (conv_out.reshape(batch_size, d_model, feat_h * feat_w).
                     transpose(1, 2))
-        # conv_out -> (B, feat_h * feat_w, d_model)
+        # conv_out -> (B, feat_h*feat_w, d_model)
 
         # Gọi Encoder
-        enc_output, enc_attn_weights = self.encoder(conv_out, spatial_pos_embed)
-        # enc_output -> (B, feat_h * feat_w, d_model)
-        # enc_attn_weights -> (num_encoder_layers, B, feat_h * feat_w, feat_h * feat_w)
+        enc_output, enc_attn_weights = self.encoder(conv_out,  spatial_pos_embed)
+        # enc_output -> (B, feat_h*feat_w, d_model)
+        # enc_attn_weights -> (num_encoder_layers, B, feat_h*feat_w, feat_h*feat_w)
 
         query_objects = torch.zeros_like(self.query_embed.unsqueeze(0).
                                          repeat((batch_size, 1, 1)))
@@ -406,7 +379,7 @@ class DETR(nn.Module):
             spatial_pos_embed)
         query_objects, decoder_attn_weights = decoder_outputs
         # query_objects -> (num_decoder_layers, B, num_queries, d_model)
-        # decoder_attn_weights -> (num_decoder_layers, B, num_queries, feat_h * feat_w)
+        # decoder_attn_weights -> (num_decoder_layers, B, num_queries, feat_h*feat_w)
 
         cls_output = self.class_mlp(query_objects)
         # cls_output -> (num_decoder_layers, B, num_queries, num_classes)
@@ -419,30 +392,30 @@ class DETR(nn.Module):
 
         if targets is not None:
             num_decoder_layers = self.num_decoder_layers
-            # Thực hiện matching cho mỗi decoder layer
+            # Thực hiện matching cho từng decoder layer
             for decoder_idx in range(num_decoder_layers):
                 cls_idx_output = cls_output[decoder_idx]
                 bbox_idx_output = bbox_output[decoder_idx]
                 with torch.no_grad():
-                    # Kết hợp tất cả các prediction boxes và xác suất class lại với nhau
+                    # Nối tất cả prediction boxes và xác suất class lại với nhau
                     class_prob = cls_idx_output.reshape((-1, self.num_classes))
                     class_prob = class_prob.softmax(dim=-1)
-                    # class_prob -> (B * num_queries, num_classes)
+                    # class_prob -> (B*num_queries, num_classes)
 
                     pred_boxes = bbox_idx_output.reshape((-1, 4))
-                    # pred_boxes -> (B * num_queries, 4)
+                    # pred_boxes -> (B*num_queries, 4)
 
-                    # Kết hợp tất cả các target boxes và labels lại với nhau
+                    # Nối tất cả target boxes và labels lại với nhau
                     target_labels = torch.cat([target["labels"] for target in targets])
                     target_boxes = torch.cat([target["boxes"] for target in targets])
-                    # len(target_labels) -> số lượng target cho toàn bộ batch
-                    # target_boxes -> (số lượng target cho toàn bộ batch, 4)
+                    # len(target_labels) -> num_targets_cho_toan_bo_batch
+                    # target_boxes -> (num_targets_cho_toan_bo_batch, 4)
 
                     # Chi phí Phân loại (Classification Cost)
                     cost_classification = -class_prob[:, target_labels]
-                    # cost_cls -> (B * num_queries, số lượng target cho toàn bộ batch)
+                    # cost_cls -> (B*num_queries, num_targets_cho_toan_bo_batch)
 
-                    # DETR dự đoán cx, cy, w, h, chúng ta cần chuyển sang x1y1x2y2 cho giou
+                    # DETR dự đoán cx,cy,w,h , chúng ta cần chuyển sang x1y1x2y2 cho giou
                     # Không cần chuyển đổi targets vì chúng đã ở định dạng x1y1x2y2
                     pred_boxes_x1y1x2y2 = torchvision.ops.box_convert(
                         pred_boxes,
@@ -454,27 +427,27 @@ class DETR(nn.Module):
                         target_boxes,
                         p=1
                      )
-                    # cost_l1 -> (B * num_queries, số lượng target cho toàn bộ batch)
+                    # cost_l1 -> (B*num_queries, num_targets_cho_toan_bo_batch)
 
                     cost_localization_giou = -torchvision.ops.generalized_box_iou(
                         pred_boxes_x1y1x2y2,
                         target_boxes
                     )
-                    # cost_giou -> (B * num_queries, số lượng target cho toàn bộ batch)
+                    # cost_giou -> (B*num_queries, num_targets_cho_toan_bo_batch)
                     total_cost = (self.l1_cost_weight * cost_localization_l1
                                   + self.cls_cost_weight * cost_classification
                                   + self.giou_cost_weight * cost_localization_giou)
 
-                    total_cost = total_cost.reshape(batch_size, self.num_queries, -1).cpu()
-                    # total_cost -> (B, num_queries, số lượng target cho toàn bộ batch)
+                    total_cost = total_cost.reshape(batch_size,self.num_queries,-1).cpu()
+                    # total_cost -> (B, num_queries, num_targets_cho_toan_bo_batch)
 
                     num_targets_per_image = [len(target["labels"]) for target in targets]
                     total_cost_per_batch_image = total_cost.split(
                         num_targets_per_image,
                         dim=-1
                     )
-                    # total_cost_per_batch_image[0] = (B, num_queries, số lượng target của ảnh thứ 0)
-                    # total_cost_per_batch_image[i] = (B, num_queries, số lượng target của ảnh thứ i)
+                    # total_cost_per_batch_image[0]=(B, num_queries, num_targets_anh_thu_0)
+                    # total_cost_per_batch_image[i]=(B, num_queries, num_targets_anh_thu_i)
 
                     match_indices = []
                     for batch_idx in range(batch_size):
@@ -482,33 +455,35 @@ class DETR(nn.Module):
                             total_cost_per_batch_image[batch_idx][batch_idx]
                         )
                         batch_idx_pred, batch_idx_target = batch_idx_assignments
-                        # len(batch_idx_assignment_pred) = số lượng target của ảnh thứ i
+                        # len(batch_idx_assignment_pred) = num_targets_anh_thu_i
                         match_indices.append((torch.as_tensor(batch_idx_pred,
                                                               dtype=torch.int64),
                                               torch.as_tensor(batch_idx_target,
                                                               dtype=torch.int64)))
                         # match_indices -> [
-                        #    ([pred_box_a1, ...], [target_box_i1, ...]),
-                        #    ([pred_box_a2, ...], [target_box_i2, ...]),
-                        #    ... các cặp assignment cho ảnh thứ i của batch
-                        #    ]
-                # pred_batch_idxs là các chỉ số batch cho mỗi cặp assignment
+                        #   ([pred_box_a1, ...],[target_box_i1, ...]),
+                        #   ([pred_box_a2, ...],[target_box_i2, ...]),
+                        #   ... các cặp gán cho ảnh thứ i trong batch
+                        #   ]
+                
+                # pred_batch_idxs là index của batch cho mỗi cặp gán
                 pred_batch_idxs = torch.cat([
                     torch.ones_like(pred_idx) * i
                     for i, (pred_idx, _) in enumerate(match_indices)
                 ])
-                # pred_batch_idxs -> (số lượng target cho toàn bộ batch, )
-                # pred_query_idx là các chỉ số prediction box (trong số num_queries)
-                # cho mỗi cặp assignment
+                # pred_batch_idxs -> (num_targets_cho_toan_bo_batch, )
+                
+                # pred_query_idx là index của prediction box (trong số num_queries)
+                # cho mỗi cặp gán
                 pred_query_idx = torch.cat([pred_idx for (pred_idx, _) in match_indices])
-                # pred_query_idx -> (số lượng target cho toàn bộ batch, )
+                # pred_query_idx -> (num_targets_cho_toan_bo_batch, )
 
-                # Đối với tất cả các prediction boxes đã được assign, lấy target label tương ứng
+                # Đối với tất cả prediction boxes được gán, lấy nhãn target
                 valid_obj_target_cls = torch.cat([
                     target["labels"][target_obj_idx]
                     for target, (_, target_obj_idx) in zip(targets, match_indices)
                 ])
-                # valid_obj_target_cls -> (số lượng target cho toàn bộ batch, )
+                # valid_obj_target_cls -> (num_targets_cho_toan_bo_batch, )
 
                 # Khởi tạo target class cho tất cả các predicted boxes là background class
                 target_classes = torch.full(
@@ -519,11 +494,11 @@ class DETR(nn.Module):
                 )
                 # target_classes -> (B, num_queries)
 
-                # Đối với những predicted boxes được assign cho một target nào đó,
-                # cập nhật target label của chúng cho phù hợp
+                # Đối với các predicted boxes đã được gán cho một target nào đó,
+                # cập nhật nhãn target tương ứng cho chúng
                 target_classes[(pred_batch_idxs, pred_query_idx)] = valid_obj_target_cls
 
-                # Để đảm bảo model không bị thiên kiến quá mức vào background class
+                # Để đảm bảo background class không bị mô hình chú ý quá mức (mất cân bằng)
                 cls_weights = torch.ones(self.num_classes)
                 cls_weights[self.bg_class_idx] = self.bg_cls_weight
 
@@ -535,7 +510,7 @@ class DETR(nn.Module):
 
                 # Lấy tọa độ pred box cho tất cả các matched pred boxes
                 matched_pred_boxes = bbox_idx_output[pred_batch_idxs, pred_query_idx]
-                # matched_pred_boxes -> (số lượng target cho toàn bộ batch, 4)
+                # matched_pred_boxes -> (num_targets_cho_toan_bo_batch, 4)
 
                 # Lấy tọa độ target box cho tất cả các matched target boxes
                 target_boxes = torch.cat([
@@ -543,7 +518,7 @@ class DETR(nn.Module):
                     for target, (_, target_obj_idx) in zip(targets, match_indices)],
                     dim=0
                 )
-                # target_boxes -> (số lượng target cho toàn bộ batch, 4)
+                # target_boxes -> (num_targets_cho_toan_bo_batch, 4)
 
                 # Chuyển đổi matched pred boxes sang định dạng x1y1x2y2
                 matched_pred_boxes_x1y1x2y2 = torchvision.ops.box_convert(
@@ -552,6 +527,7 @@ class DETR(nn.Module):
                     'xyxy'
                 )
                 # Không cần chuyển đổi target boxes vì chúng đã ở định dạng x1y1x2y2
+                
                 # Tính L1 Localization loss
                 loss_bbox = torch.nn.functional.l1_loss(
                     matched_pred_boxes_x1y1x2y2,
@@ -573,7 +549,7 @@ class DETR(nn.Module):
                 )
             detr_output['loss'] = losses
         else:
-            # Đối với quá trình inference, chúng ta chỉ quan tâm đến output của layer cuối cùng
+            # Đối với quá trình inference (suy luận), chúng ta chỉ quan tâm đến đầu ra của layer cuối cùng
             cls_output = cls_output[-1]
             bbox_output = bbox_output[-1]
             # cls_output -> (B, num_queries, num_classes)
@@ -581,14 +557,14 @@ class DETR(nn.Module):
 
             prob = torch.nn.functional.softmax(cls_output, -1)
 
-            # Lấy tất cả các query boxes và class foreground tốt nhất của chúng làm label
+            # Lấy tất cả các query boxes và class foreground tốt nhất của chúng làm nhãn
             if self.bg_class_idx == 0:
                 scores, labels = prob[..., 1:].max(-1)
                 labels = labels+1
             else:
                 scores, labels = prob[..., :-1].max(-1)
 
-            # Chuyển đổi sang định dạng x1y1x2y2
+            # chuyển đổi sang định dạng x1y1x2y2
             boxes = torchvision.ops.box_convert(bbox_output,
                                                 'cxcywh',
                                                 'xyxy')
@@ -598,13 +574,13 @@ class DETR(nn.Module):
                 labels_idx = labels[batch_idx]
                 boxes_idx = boxes[batch_idx]
 
-                # Lọc theo điểm số thấp (Low score filtering)
+                # Lọc theo ngưỡng điểm số thấp (Low score filtering)
                 keep_idxs = scores_idx >= score_thresh
                 scores_idx = scores_idx[keep_idxs]
                 boxes_idx = boxes_idx[keep_idxs]
                 labels_idx = labels_idx[keep_idxs]
 
-                # Lọc theo NMS (NMS filtering)
+                # Lọc bằng NMS
                 if use_nms:
                     keep_idxs = torchvision.ops.batched_nms(
                         boxes_idx,
