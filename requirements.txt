@@ -1,0 +1,10 @@
+einops
+numpy
+opencv_python
+Pillow
+PyYAML
+torch
+torchvision
+tqdm
+scipy
+datasets
