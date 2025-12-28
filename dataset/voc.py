@@ -5,21 +5,33 @@ from torch.utils.data.dataset import Dataset
 import xml.etree.ElementTree as ET
 from torchvision import tv_tensors
 from torchvision.io import read_image
+from typing import Literal
 
 
-def load_images_and_anns(im_sets, label2idx, ann_fname, split):
-    r"""
+def load_images_and_anns(im_sets, label2idx, ann_fname):
+    """
     Phương thức để lấy các tệp xml và với mỗi tệp, 
     lấy tất cả các object cùng thông tin ground truth detection 
     của chúng cho dataset.
     :param im_sets: Các bộ image cần xem xét
     :param label2idx: Mapping từ Class Name sang index cho dataset
-    :param ann_fname: Tệp txt chứa tên image {trainval.txt/test.txt}
-    :param split: train/test
+    :param ann_fname: Tệp txt chứa tên image {trainval.txt/test.txt/val.txt}
     :return:
+
+    Bộ train lấy:
+    train của VOC2007 và trainval của VOC2012
+    Bộ val lấy:
+    val của VOC2007
+    Bộ test lấy:
+    test của VOC2007
+
     """
     im_infos = []
     for im_set in im_sets:
+        if ann_fname == 'val' and im_sets=='data/VOC2012':
+            continue  # Bỏ qua VOC2012-val vì chỉ lấy val của VOC2007
+        if ann_fname == 'train' and im_set == 'data/VOC2012':
+            ann_fname='trainval'  # VOC2012 lấy toàn bộ để train
         im_names = []
         # Lấy tất cả image names trong tệp txt cho imageset này
         for line in open(os.path.join(
@@ -74,12 +86,13 @@ def load_images_and_anns(im_sets, label2idx, ann_fname, split):
 
 
 class VOCDataset(Dataset):
-    def __init__(self, split, im_sets, im_size=640):
+    def __init__(self, split: Literal["train", "val", "test"], im_sets, im_size=640):
         self.split = split
 
         # Các imageset cho instance của dataset này (VOC2007/VOC2007+VOC2012/VOC2007-test)
         self.im_sets = im_sets
-        self.fname = 'trainval' if self.split == 'train' else 'test'
+        
+        self.fname = split
         self.im_size = im_size
         self.im_mean = [123.0, 117.0, 104.0]
         self.imagenet_mean = [0.485, 0.456, 0.406]
@@ -102,13 +115,20 @@ class VOCDataset(Dataset):
                                                     std=self.imagenet_std)
 
             ]),
-            'test': torchvision.transforms.v2.Compose([
+            'val': torchvision.transforms.v2.Compose([
                 torchvision.transforms.v2.Resize(size=(self.im_size, self.im_size)),
                 torchvision.transforms.v2.ToPureTensor(),
                 torchvision.transforms.v2.ToDtype(torch.float32, scale=True),
                 torchvision.transforms.v2.Normalize(mean=self.imagenet_mean,
                                                     std=self.imagenet_std)
             ]),
+            'test': torchvision.transforms.v2.Compose([
+                torchvision.transforms.v2.Resize(size=(self.im_size, self.im_size)),
+                torchvision.transforms.v2.ToPureTensor(),
+                torchvision.transforms.v2.ToDtype(torch.float32, scale=True),
+                torchvision.transforms.v2.Normalize(mean=self.imagenet_mean,
+                                                    std=self.imagenet_std)
+            ])
         }
 
         classes = [
@@ -125,8 +145,7 @@ class VOCDataset(Dataset):
         print(self.idx2label)
         self.images_info = load_images_and_anns(self.im_sets,
                                                 self.label2idx,
-                                                self.fname,
-                                                self.split)
+                                                self.fname)
 
     def __len__(self):
         return len(self.images_info)

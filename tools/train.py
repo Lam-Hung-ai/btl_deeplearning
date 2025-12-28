@@ -51,6 +51,15 @@ def train(args):
                                shuffle=True,
                                collate_fn=collate_function)
 
+    # Khởi tạo dataset và dataloader cho việc validation
+    val_voc = VOCDataset('val',
+                     im_sets=dataset_config['val_im_sets'],
+                     im_size=dataset_config['im_size'])
+    val_dataset = DataLoader(val_voc,
+                               batch_size=train_config['batch_size'],
+                               shuffle=False,
+                               collate_fn=collate_function)
+
     # Khởi tạo model và load checkpoint nếu đã tồn tại
     model = DETR(
         config=model_config,
@@ -99,6 +108,12 @@ def train(args):
     num_epochs = train_config['num_epochs']
     steps = 0
     
+    # Early Stopping parameters
+    best_val_loss = float('inf')
+    patience = train_config.get('patience', 7)
+    trigger_times = 0
+    log_file_path = os.path.join(train_config['task_name'], 'training_log.txt')
+
     # Vòng lặp training qua từng epoch
     for i in range(num_epochs):
         detr_classification_losses = []
@@ -148,17 +163,52 @@ def train(args):
         optimizer.zero_grad()
         lr_scheduler.step()
         
+        # Validation loop
+        model.eval()
+        val_losses = []
+        with torch.no_grad():
+            for ims, targets, _ in tqdm(val_dataset, desc='Validation'):
+                for target in targets:
+                    target['boxes'] = target['boxes'].float().to(device)
+                    target['labels'] = target['labels'].long().to(device)
+                images = torch.stack([im.float().to(device) for im in ims], dim=0)
+                
+                batch_losses = model(images, targets)['loss']
+                loss = (sum(batch_losses['classification']) +
+                        sum(batch_losses['bbox_regression']))
+                val_losses.append(loss.item())
+        
+        model.train()
+
+        avg_train_loss = np.mean(detr_classification_losses) + np.mean(detr_localization_losses)
+        avg_val_loss = np.mean(val_losses)
+
         print('Đã hoàn thành epoch {}'.format(i+1))
         loss_output = ''
-        loss_output += 'DETR Classification Loss : {:.4f}'.format(
-            np.mean(detr_classification_losses))
-        loss_output += ' | DETR Localization Loss : {:.4f}'.format(
-            np.mean(detr_localization_losses))
+        loss_output += 'Train Loss : {:.4f}'.format(avg_train_loss)
+        loss_output += ' | Val Loss : {:.4f}'.format(avg_val_loss)
         print(loss_output)
+        
+        # Log to file
+        with open(log_file_path, 'a') as f:
+            f.write(f"Epoch {i+1} | {loss_output}\n")
         
         # Lưu model state_dict sau mỗi epoch
         torch.save(model.state_dict(), os.path.join(train_config['task_name'],
                                                    train_config['ckpt_name']))
+
+        # Early Stopping
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            trigger_times = 0
+            torch.save(model.state_dict(), os.path.join(train_config['task_name'], 'best_' + train_config['ckpt_name']))
+            print("Saved best model.")
+        else:
+            trigger_times += 1
+            print(f'Early stopping trigger times: {trigger_times}/{patience}')
+            if trigger_times >= patience:
+                print('Early stopping!')
+                break
     print('Hoàn tất Training...')
 
 
