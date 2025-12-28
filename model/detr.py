@@ -417,7 +417,7 @@ class DETR(nn.Module):
         detections = []
         detr_output = {}
 
-        if self.training:
+        if targets is not None:
             num_decoder_layers = self.num_decoder_layers
             # Thực hiện matching cho mỗi decoder layer
             for decoder_idx in range(num_decoder_layers):
