@@ -15,23 +15,20 @@ def load_images_and_anns(im_sets, label2idx, ann_fname):
     của chúng cho dataset.
     :param im_sets: Các bộ image cần xem xét
     :param label2idx: Mapping từ Class Name sang index cho dataset
-    :param ann_fname: Tệp txt chứa tên image {trainval.txt/test.txt/val.txt}
+    :param ann_fname: Tệp txt chứa tên image {train.txt/test.txt/val.txt}
     :return:
 
     Bộ train lấy:
-    train của VOC2007 và trainval của VOC2012
+    train của VOC2007 và train của VOC2012
     Bộ val lấy:
     val của VOC2007
     Bộ test lấy:
     test của VOC2007
-
     """
     im_infos = []
     for im_set in im_sets:
         if ann_fname == 'val' and im_sets=='data/VOC2012':
             continue  # Bỏ qua VOC2012-val vì chỉ lấy val của VOC2007
-        if ann_fname == 'train' and im_set == 'data/VOC2012':
-            ann_fname='trainval'  # VOC2012 lấy toàn bộ để train
         im_names = []
         # Lấy tất cả image names trong tệp txt cho imageset này
         for line in open(os.path.join(
