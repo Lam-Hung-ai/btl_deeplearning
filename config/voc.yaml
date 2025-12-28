@@ -7,6 +7,7 @@ dataset_params:
 
 model_params:
   im_channels : 3
+  backbone: 'resnet34'
   backbone_channels : 512
   d_model : 256
   num_queries : 25
