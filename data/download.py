@@ -9,7 +9,7 @@ path = kagglehub.dataset_download("bardiaardakanian/voc0712")
 os.makedirs("data", exist_ok=True)
 
 src = Path(
-    "~/.cache/kagglehub/datasets/bardiaardakanian/voc0712/versions/1/VOC_dataset/VOCdevkit/"
+    "~/.cache/kagglehub/datasets/bardiaardakanian/voc0712/versions/3/VOC_dataset/VOCdevkit/*"
 ).expanduser()
 dst = Path("data/")
 shutil.move(src, dst)
