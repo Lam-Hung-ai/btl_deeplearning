@@ -1,6 +1,7 @@
 dataset_params:
   train_im_sets: ['data/VOC2007', 'data/VOC2012']
   test_im_sets: ['data/VOC2007-test']
+  val_im_sets: ['data/VOC2007_2012-val']
   num_classes : 21
   bg_class_idx : 0
   im_size : 640

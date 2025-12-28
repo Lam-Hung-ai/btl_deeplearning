@@ -1,4 +1,7 @@
-/data/*
+/data/VOC2007/
+/data/VOC2012/
+/data/VOC2007-test/
+/data/VOC2007_2012-val/
 __pycache__/
 *.pyc
 *.pyo

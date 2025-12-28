@@ -5,6 +5,7 @@ Pillow
 PyYAML
 torch
 torchvision
+kagglehub
 tqdm
 scipy
 datasets
